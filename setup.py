@@ -11,5 +11,6 @@ setup(
     author='Tasos M. Adamopoulos',
     license='MIT',
     packages=find_packages(),
-    install_requires=requirements
+    install_requires=requirements,
+    python_requires='>=3.9,<3.14',
 )
