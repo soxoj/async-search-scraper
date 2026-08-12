@@ -9,7 +9,7 @@ class Torch(SearchEngine):
         super(Torch, self).__init__(proxy, timeout, *args, **kwargs)
         self._base_url = u'http://torchdeedp3i2jigzjdmfpn5ttjhthh5wbmda2rr3jvqjg5p77c54dqd.onion'
         if not proxy:
-            out.console('Torch requires TOR proxy!', level=out.Level.warning)
+            self.print_func('Torch requires TOR proxy!', level=out.Level.warning)
         self._current_page = 1
     
     def _selectors(self, element):

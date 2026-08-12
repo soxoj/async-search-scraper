@@ -1,6 +1,5 @@
 from ..engine import SearchEngine
 from ..config import PROXY, TIMEOUT, FAKE_USER_AGENT
-from ..utils import unquote_url
 
 
 class Dogpile(SearchEngine):
@@ -36,7 +35,7 @@ class Dogpile(SearchEngine):
     def _get_text(self, tag, item='text'):
         '''Returns the text of search results items.'''
         selector = self._selectors('text')
-        tag = tag.select(selector['tag'])[selector['index']]
-        return self._get_tag_item(tag, 'text')
+        tags = tag.select(selector['tag'])
+        return self._get_tag_item(tags[selector['index']] if tags else None, 'text')
 
     

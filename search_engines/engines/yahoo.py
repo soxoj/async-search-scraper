@@ -1,10 +1,9 @@
 import re
 from html import unescape
 
-from curl_cffi.requests import AsyncSession
-
 from ..engine import SearchEngine
 from ..config import PROXY, TIMEOUT
+from ..http_client import CurlHttpClient
 from ..utils import unquote_url
 
 
@@ -19,11 +18,11 @@ class Yahoo(SearchEngine):
     EuConsent/GUC cookies stick on the session.
     '''
 
+    _http_client_class = CurlHttpClient
+
     def __init__(self, proxy=PROXY, timeout=TIMEOUT, *args, **kwargs):
         super(Yahoo, self).__init__(proxy, timeout, *args, **kwargs)
         self._base_url = 'https://search.yahoo.com'
-        self._proxy = proxy
-        self._yahoo_session = None
         self._consent_done = False
 
     def _selectors(self, element):
@@ -49,35 +48,9 @@ class Yahoo(SearchEngine):
         url = self._get_tag_item(tags.select_one(selector), 'href') or None
         return {'url': url, 'data': None}
 
-    async def _ensure_session(self):
-        if self._yahoo_session is None:
-            kwargs = {'impersonate': 'chrome120'}
-            if self._proxy:
-                kwargs['proxies'] = {'http': self._proxy, 'https': self._proxy}
-            self._yahoo_session = AsyncSession(**kwargs)
-
-    async def close(self):
-        await super(Yahoo, self).close()
-        if self._yahoo_session is not None:
-            await self._yahoo_session.close()
-            self._yahoo_session = None
-
     async def _get_page(self, page, data=None):
-        await self._ensure_session()
         await self._accept_consent()
-        response_t = self._http_client.response
-        try:
-            if data:
-                r = await self._yahoo_session.post(
-                    page, data=data, timeout=self._http_client.timeout, allow_redirects=True,
-                )
-            else:
-                r = await self._yahoo_session.get(
-                    page, timeout=self._http_client.timeout, allow_redirects=True,
-                )
-        except Exception as e:
-            return response_t(http=0, html=type(e).__name__)
-        return response_t(http=r.status_code, html=r.text)
+        return await super(Yahoo, self)._get_page(page, data)
 
     async def _accept_consent(self):
         '''Yahoo redirects EU visitors through a GDPR consent page that must
@@ -86,10 +59,13 @@ class Yahoo(SearchEngine):
         '''
         if self._consent_done:
             return
+        # Needs the raw response: the consent form is POSTed back to the URL we
+        # were redirected to, which the (http, html) wrapper does not carry.
+        session = self._http_client._session()
 
         probe_url = '{}/search?p=python'.format(self._base_url)
         try:
-            r = await self._yahoo_session.get(
+            r = await session.get(
                 probe_url, timeout=self._http_client.timeout, allow_redirects=True,
             )
         except Exception:
@@ -117,7 +93,7 @@ class Yahoo(SearchEngine):
             'agree': 'agree',
         }
         try:
-            await self._yahoo_session.post(
+            await session.post(
                 str(r.url), data=data,
                 timeout=self._http_client.timeout, allow_redirects=True,
             )

@@ -65,15 +65,5 @@ class Ask(SearchEngine):
         if not data:
             return []
         results_data = data.get('search', {}).get('webResults', {}).get('results', [])
-        results = [self._item(r) for r in results_data]
-
-        if u'url' in self._filters:
-            results = [l for l in results if self._query_in(l['link'])]
-        if u'title' in self._filters:
-            results = [l for l in results if self._query_in(l['title'])]
-        if u'text' in self._filters:
-            results = [l for l in results if self._query_in(l['text'])]
-        if u'host' in self._filters:
-            results = [l for l in results if self._query_in(utils.domain(l['link']))]
-        return results
+        return self._apply_filters([self._item(r) for r in results_data])
 

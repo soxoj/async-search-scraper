@@ -77,17 +77,7 @@ class Brave(SearchEngine):
 
     def _filter_results(self, soup):
         items = (self._payload or {}).get('web', {}).get('results') or []
-        results = [self._item_from_dict(r) for r in items]
-
-        if u'url' in self._filters:
-            results = [l for l in results if self._query_in(l['link'])]
-        if u'title' in self._filters:
-            results = [l for l in results if self._query_in(l['title'])]
-        if u'text' in self._filters:
-            results = [l for l in results if self._query_in(l['text'])]
-        if u'host' in self._filters:
-            results = [l for l in results if self._query_in(utils.domain(l['link']))]
-        return results
+        return self._apply_filters([self._item_from_dict(r) for r in items])
 
     def _item_from_dict(self, r):
         link = utils.unquote_url(r.get('url', u''))

@@ -7,11 +7,18 @@ from . import config as cfg
 class MultipleSearchEngines(object):
     '''Uses multiple search engines.'''
     def __init__(self, engines, proxy=cfg.PROXY, timeout=cfg.TIMEOUT):
-        self._engines = [
-            se(proxy, timeout) 
-            for se in search_engines_dict.values() 
-            if se.__name__.lower() in engines
-        ]
+        self._engines = []
+        for se in search_engines_dict.values():
+            if se.__name__.lower() not in engines:
+                continue
+            try:
+                self._engines.append(se(proxy, timeout))
+            except Exception as e:
+                # Engines needing config (Brave wants an API key) must not take
+                # down the whole run, notably with 'all'.
+                out.console(
+                    u'Skipping {}: {}'.format(se.__name__, e), level=out.Level.warning
+                )
         self._filter = None
 
         self.ignore_duplicate_urls = False
@@ -22,6 +29,12 @@ class MultipleSearchEngines(object):
     def set_search_operator(self, operator):
         '''Filters search results based on the operator.'''
         self._filter = operator
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
 
     async def close(self):
         for e in self._engines:

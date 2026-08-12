@@ -1,19 +1,11 @@
-from __future__ import print_function
-
 import csv
 import json
 import io
 import re
 from collections import namedtuple
+from shutil import get_terminal_size
 
-try:
-    from shutil import get_terminal_size
-except ImportError:
-    from .libs.get_terminal_size import get_terminal_size
-
-from .utils import encode_str, decode_bytes
-from .libs import windows_cmd_encoding
-from .config import PYTHON_VERSION
+from .utils import decode_bytes
 
 
 def print_results(search_engines):
@@ -27,7 +19,6 @@ def print_results(search_engines):
 
 def create_csv_data(search_engines):
     '''CSV formats the search results.'''
-    encoder = decode_bytes if PYTHON_VERSION == 3 else encode_str
     data = [['query', 'engine', 'domain', 'URL', 'title', 'text']]
 
     for engine in search_engines:
@@ -36,7 +27,7 @@ def create_csv_data(search_engines):
                 engine._query, engine.__class__.__name__, 
                 i['host'], i['link'], i['title'], i['text']
             ]
-            row = [encoder(i) for i in row]
+            row = [decode_bytes(i) for i in row]
             data.append(row)
     return data
 
@@ -73,7 +64,7 @@ def create_html_data(search_engines):
 
 def _replace_with_bold(query, data):
     '''Places the query in <b> tags.'''
-    for match in re.findall(query, data, re.I):
+    for match in re.findall(re.escape(query), data, re.I):
         data = data.replace(match, u'<b>{}</b>'.format(match))
     return data
 
@@ -81,11 +72,8 @@ def _replace_with_bold(query, data):
 def write_file(data, path, encoding='utf-8'):
     '''Writes search results data to file.'''
     try:
-        if PYTHON_VERSION == 2 and type(data) in (list, str):
-            f = io.open(path, 'wb') 
-        else: 
-            f = io.open(path, 'w', encoding=encoding, newline='')
-        
+        f = io.open(path, 'w', encoding=encoding, newline='')
+
         if type(data) is list:
             writer = csv.writer(f)
             writer.writerows(data)

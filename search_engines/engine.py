@@ -2,7 +2,6 @@ import asyncio
 
 from bs4 import BeautifulSoup
 from random import uniform as random_uniform
-from collections import namedtuple
 
 from .results import SearchResults
 from .http_client import HttpClient
@@ -13,12 +12,18 @@ from . import config as cfg
 
 class SearchEngine(object):
     '''The base class for all Search Engines.'''
+
+    _http_client_class = HttpClient
+    '''The transport. Engines behind a TLS fingerprint check swap in CurlHttpClient.'''
+    _block_markers = ()
+    '''Strings that mark a captcha/block page served with HTTP 200.'''
+
     def __init__(self, proxy=cfg.PROXY, timeout=cfg.TIMEOUT, *args, **kwargs):
         '''
-        :param str proxy: optional, a proxy server  
+        :param str proxy: optional, a proxy server
         :param int timeout: optional, the HTTP timeout
         '''
-        self._http_client = HttpClient(timeout, proxy) 
+        self._http_client = self._http_client_class(timeout, proxy)
         self._query = ''
         self._filters = []
 
@@ -42,6 +47,9 @@ class SearchEngine(object):
         '''Collects only unique domains.'''
         self.is_banned = False
         '''Indicates if a ban occured'''
+        self.http_status = None
+        '''HTTP status of the last response; 0 means the request never landed.
+        Tells a transport failure apart from a genuinely empty result set.'''
 
     async def __aenter__(self):
         return self
@@ -105,11 +113,8 @@ class SearchEngine(object):
         '''Checks if query is contained in the item.'''
         return self._query.lower() in item.lower()
     
-    def _filter_results(self, soup):
-        '''Processes and filters the search results.''' 
-        tags = soup.select(self._selectors('links'))
-        results = [self._item(l) for l in tags]
-
+    def _apply_filters(self, results):
+        '''Applies the active search operators to parsed results.'''
         if u'url' in self._filters:
             results = [l for l in results if self._query_in(l['link'])]
         if u'title' in self._filters:
@@ -119,9 +124,15 @@ class SearchEngine(object):
         if u'host' in self._filters:
             results = [l for l in results if self._query_in(utils.domain(l['link']))]
         return results
-    
+
+    def _filter_results(self, soup):
+        '''Processes and filters the search results.'''
+        tags = soup.select(self._selectors('links'))
+        return self._apply_filters([self._item(l) for l in tags])
+
     def _collect_results(self, items):
-        '''Colects the search results items.''' 
+        '''Colects the search results items. Returns the number kept.'''
+        collected = 0
         for item in items:
             if not utils.is_url(item['link']):
                 continue
@@ -132,17 +143,26 @@ class SearchEngine(object):
             if self.ignore_duplicate_domains and item['host'] in self.results.hosts():
                 continue
             self.results.append(item)
+            collected += 1
+        return collected
 
     def _is_ok(self, response):
-        '''Checks if the HTTP response is 200 OK.'''
-        self.is_banned = response.http in [403, 429, 503]
-        
-        if response.http == 200:
+        '''Checks if the HTTP response is 200 OK and not a block page.'''
+        # 202 is what DuckDuckGo and Dogpile answer with when they serve a
+        # challenge page instead of results.
+        blocked = any(m in (response.html or u'') for m in self._block_markers)
+        self.http_status = response.http
+        self.is_banned = response.http in [202, 403, 429, 503] or blocked
+
+        if response.http == 200 and not blocked:
             return True
-        msg = ('HTTP ' + str(response.http)) if response.http else response.html
+        if blocked:
+            msg = u'Blocked by ' + self.__class__.__name__
+        else:
+            msg = ('HTTP ' + str(response.http)) if response.http else response.html
         self.print_func(msg, level=out.Level.error)
         return False
-    
+
     def set_headers(self, headers):
         '''Sets HTTP headers.
         
@@ -184,10 +204,17 @@ class SearchEngine(object):
                     break
                 tags = BeautifulSoup(response.html, "html.parser")
                 items = self._filter_results(tags)
-                self._collect_results(items)
-                
+                collected = self._collect_results(items)
+
                 msg = 'page: {:<8} links: {}'.format(page, len(self.results))
                 self.print_func(msg, end='')
+
+                # Nothing new on this page: results ran out, the selectors went
+                # stale, or pagination is looping. Either way the remaining pages
+                # are wasted requests. Skipped when filters are on, since those
+                # can legitimately empty out a page that has more behind it.
+                if not collected and not self._filters:
+                    break
                 request = self._next_page(tags)
 
                 if not request['url']:

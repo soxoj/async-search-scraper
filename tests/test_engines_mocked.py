@@ -2,16 +2,21 @@
 to return canned HTML/JSON so we exercise selector / parser logic only.
 Runs on every supported Python version in CI.
 """
+import asyncio
 import json
 import sys
 from collections import namedtuple
 from pathlib import Path
 
 import pytest
+from aiohttp_socks import ProxyConnectionError, ProxyTimeoutError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from search_engines import Aol, Bing, Brave, Startpage, Yahoo  # noqa: E402
+from search_engines import Aol, Bing, Brave, Duckduckgo, Startpage, Yahoo  # noqa: E402
+from search_engines.multiple_search_engines import (  # noqa: E402
+    AllSearchEngines, MultipleSearchEngines,
+)
 
 Response = namedtuple('Response', ['http', 'html'])
 
@@ -171,3 +176,125 @@ async def test_startpage(monkeypatch):
     assert len(links) == 2
     assert 'https://example.com/sp-1' in links
     assert any('Startpage 1' in r['title'] for r in results)
+
+
+# ---------- regression tests ----------
+
+BING_REDIRECT_HTML = """
+<html><body><ol id="b_results">
+  <li class="b_algo">
+    <h2><a href="https://www.bing.com/ck/a?!&amp;&amp;p=abc&amp;u=a1aHR0cHM6Ly93d3cucHl0aG9uLm9yZy8&amp;ntb=1">Python</a></h2>
+    <p>snippet</p>
+  </li>
+</ol></body></html>
+"""
+
+DDG_REDIRECT_HTML = """
+<html><body><div class="results">
+  <div class="result results_links results_links_deep web-result">
+    <h2 class="result__title"><a href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.python.org%2F&amp;rut=x">Python</a></h2>
+    <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.python.org%2F&amp;rut=x">snippet</a>
+  </div>
+</div></body></html>
+"""
+
+
+async def test_bing_unwraps_redirect(monkeypatch):
+    '''Bing hands out bing.com/ck/a redirects; the real URL is base64 in `u`.'''
+    _patch_get_page(monkeypatch, Bing, BING_REDIRECT_HTML)
+    async with Bing() as e:
+        _silence(e)
+        results = await e.search('test', pages=1)
+    assert results.links() == ['https://www.python.org/']
+
+
+async def test_duckduckgo_unwraps_redirect(monkeypatch):
+    '''GET responses wrap links in a protocol-relative /l/?uddg= redirect.'''
+    _patch_get_page(monkeypatch, Duckduckgo, DDG_REDIRECT_HTML)
+    async with Duckduckgo() as e:
+        _silence(e)
+        results = await e.search('test', pages=1)
+    assert results.links() == ['https://www.python.org/']
+
+
+async def test_block_page_with_http_200_is_a_ban(monkeypatch):
+    '''A captcha served with HTTP 200 must not read as "no results".'''
+    _patch_get_page(monkeypatch, Startpage, '<html><body>sp/captcha-block</body></html>')
+    async with Startpage() as e:
+        _silence(e)
+        results = await e.search('test', pages=1)
+    assert len(results) == 0
+    assert e.is_banned
+
+
+async def test_empty_page_stops_pagination(monkeypatch):
+    '''A page with no new results must not burn the remaining page budget.'''
+    calls = []
+
+    async def fake(self, page, data=None):
+        calls.append(page)
+        return Response(http=200, html='<html><body></body></html>')
+
+    monkeypatch.setattr(Bing, '_get_page', fake)
+    async with Bing() as e:
+        _silence(e)
+        await e.search('test', pages=20)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('exc', [
+    asyncio.TimeoutError(),                  # not an aiohttp.ClientError
+    ProxyTimeoutError('Proxy connection timed out: 60'),   # subclasses plain Exception
+    ProxyConnectionError('refused'),
+])
+async def test_transport_errors_do_not_raise(monkeypatch, exc):
+    '''Transport failures must surface as http=0, not escape search().'''
+    from search_engines.http_client import HttpClient
+
+    class Boom:
+        async def get(self, *a, **k):
+            raise exc
+
+    async with Bing() as e:
+        _silence(e)
+        monkeypatch.setattr(HttpClient, '_session', lambda self: Boom())
+        results = await e.search('test', pages=1)
+    assert len(results) == 0
+    assert not e.is_banned          # a broken path is not a ban
+    assert e.http_status == 0       # ...and is distinguishable from empty
+
+
+async def test_engine_constructs_outside_event_loop():
+    '''aiohttp needs a running loop; the session must be created lazily.'''
+    engine = await asyncio.get_running_loop().run_in_executor(None, Bing)
+    await engine.close()
+
+
+async def test_multiple_engines_is_async_context_manager(monkeypatch):
+    _patch_get_page(monkeypatch, Bing, BING_HTML)
+    async with MultipleSearchEngines(['bing']) as engines:
+        results = await engines.search('test', pages=1)
+    assert len(results) == 2
+
+
+async def test_all_engines_skips_unconfigured(monkeypatch):
+    '''Brave raises without an API key; that must not sink the whole run.'''
+    monkeypatch.delenv('BRAVE_API_KEY', raising=False)
+    engines = AllSearchEngines()
+    await engines.close()
+    names = [e.__class__.__name__ for e in engines._engines]
+    assert 'Brave' not in names
+    assert 'Bing' in names
+
+
+def test_filters_apply_to_json_engines(monkeypatch):
+    '''The host filter used to NameError on the JSON engines.'''
+    monkeypatch.setenv('BRAVE_API_KEY', 'fake-key-for-tests')
+    e = Brave()
+    e._filters = ['host']
+    e._query = 'python.org'
+    items = [
+        {'host': 'python.org', 'link': 'https://python.org/a', 'title': '', 'text': ''},
+        {'host': 'example.com', 'link': 'https://example.com/b', 'title': '', 'text': ''},
+    ]
+    assert e._apply_filters(items) == items[:1]

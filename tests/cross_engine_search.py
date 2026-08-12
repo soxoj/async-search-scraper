@@ -6,13 +6,12 @@ Usage:
     BRAVE_API_KEY=... python tests/cross_engine_search.py
 """
 import asyncio
-import base64
 import csv
 import os
 import sys
 from collections import OrderedDict
 from itertools import combinations
-from urllib.parse import urlparse, urlunparse, parse_qs
+from urllib.parse import urlparse, urlunparse
 
 sys.path.insert(0, '.')
 
@@ -27,24 +26,6 @@ ENGINES = [
     ('Startpage', Startpage, {}),
     ('AOL', Aol, {}),
 ]
-
-
-def unwrap_bing_redirect(url: str) -> str:
-    """Bing serves results as bing.com/ck/a?...&u=a1<base64>... redirects.
-    Decode the `u` param to recover the real target URL."""
-    try:
-        p = urlparse(url)
-        if 'bing.com' not in p.netloc or '/ck/' not in p.path:
-            return url
-        u = parse_qs(p.query).get('u', [''])[0]
-        if not u:
-            return url
-        payload = u[2:] if len(u) > 2 and u[:2].isalnum() else u
-        payload += '=' * (-len(payload) % 4)
-        decoded = base64.urlsafe_b64decode(payload).decode('utf-8', 'replace')
-        return decoded if decoded.startswith(('http://', 'https://')) else url
-    except Exception:
-        return url
 
 
 def normalize_url(url: str) -> str:
@@ -68,7 +49,7 @@ async def search_one(name, cls, kwargs):
             results = await engine.search(QUERY, pages=PAGES)
             items = []
             for r in results:
-                real = unwrap_bing_redirect(r['link']) if name == 'Bing' else r['link']
+                real = r['link']
                 norm = normalize_url(real)
                 items.append({
                     'url': norm,

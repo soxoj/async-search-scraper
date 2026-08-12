@@ -6,7 +6,7 @@
 
 > Query a dozen search engines from a **single async Python call** — and get back a unified, deduplicated list of results.
 
-- 🧠 One unified async API over **12 engines** (Bing, Brave, Yahoo, Startpage, AOL, Ask, Tor's Torch, …).
+- 🧠 One unified async API over a dozen engines — **Brave, Yahoo, DuckDuckGo and Bing** are the ones that reliably return results today.
 - ⚡ Drop-in **CLI** for one-shot searches with `print` / `html` / `csv` / `json` output.
 - 🧰 Built-in **pagination, deduplication, result filtering**, and HTTP/SOCKS proxy support.
 
@@ -38,18 +38,41 @@ That's it — `results.links()` gives you a flat `list[str]` of URLs; `results` 
 
 | Engine | Status | Notes |
 |---|---|---|
-| [Bing](https://www.bing.com) | ✅ Working | |
-| [Brave](https://search.brave.com) | ✅ Working | Uses the official [Brave Search API](https://api.search.brave.com); set `BRAVE_API_KEY` or pass `api_key=...`. |
-| [Yahoo](https://search.yahoo.com) | ✅ Working | Handles the GDPR consent redirect automatically. |
-| [Startpage](https://www.startpage.com) | ✅ Working | |
-| [AOL](https://search.aol.com) | ✅ Working | |
+| [Yahoo](https://search.yahoo.com) | ✅ Working | The most reliable of the HTML engines. Clears the GDPR consent redirect for you. |
+| [AOL](https://search.aol.com) | ✅ Working | AOL retired its own search and now runs on Yahoo's syndicated index, so expect Yahoo's results. |
+| [Brave](https://search.brave.com) | ✅ Working | Official [Brave Search API](https://api.search.brave.com) — the only engine here with no scraping involved. Needs `BRAVE_API_KEY`. |
+| [DuckDuckGo](https://duckduckgo.com) | ✅ Working | Occasionally answers with a challenge instead of results; retry or check `is_banned`. |
+| [Bing](https://www.bing.com) | ⚠️ Rate-sensitive | Fine for occasional queries, but starts demanding a captcha if you hammer it. Slow the pace down (`min_delay`/`max_delay`) and watch `is_banned`. |
+| [Startpage](https://www.startpage.com) | ⚠️ Often blocked | Serves a captcha to most non-browser traffic, including via proxies. Usable if you happen to have a clean address, otherwise prefer Yahoo or Brave. |
+| [Mojeek](https://www.mojeek.com) | ⚠️ Often blocked | Same story as Startpage — expect a captcha more often than results. |
 | [Torch](http://torchdeedp3i2jigzjdmfpn5ttjhthh5wbmda2rr3jvqjg5p77c54dqd.onion) | 🧅 Tor only | Requires a running TOR proxy (`socks5://127.0.0.1:9050`). |
-| [Ask](https://www.ask.com) | ❌ Deprecated | |
-| [Google](https://www.google.com) | ❌ Deprecated | |
-| [DuckDuckGo](https://duckduckgo.com) | ❌ Deprecated | |
-| [Dogpile](https://www.dogpile.com) | ❌ Deprecated | |
-| [Mojeek](https://www.mojeek.com) | ❌ Deprecated | |
-| [Qwant](https://www.qwant.com) | ❌ Deprecated | |
+| [Google](https://www.google.com) | ❌ Deprecated | Renders results with JavaScript — the HTML it serves contains none, so there is nothing to scrape. |
+| [Ask](https://www.ask.com) | ❌ Deprecated | IAC shut the search business down; the site is a farewell page. Not coming back. |
+| [Dogpile](https://www.dogpile.com) | ❌ Deprecated | Behind a JavaScript bot challenge that needs a real browser to solve. |
+| [Qwant](https://www.qwant.com) | ❌ Deprecated | Its API now requires an auth token that is not publicly available. |
+
+Deprecated engines are kept importable and registered — the code still parses their
+markup, so if an endpoint comes back, only the transport needs revisiting.
+
+> [!NOTE]
+> Empty results are never silent. `is_banned` is set when an engine answers with a
+> captcha or block page, including the ones served with HTTP 200, and `http_status`
+> holds the last response code — `0` means the request never landed. So a transport
+> failure, a ban, and a genuinely empty result set stay distinguishable:
+>
+> ```python
+> if engine.http_status == 0: ...   # proxy/network never got there
+> elif engine.is_banned: ...        # the engine blocked us
+> elif not len(results): ...        # the query really has no hits
+> ```
+
+> [!TIP]
+> Blocking depends on where you run from — a cloud server gets challenged far sooner
+> than a home connection. If an engine reports `is_banned`, a proxy is worth a try:
+> `Bing(proxy="http://user:pass@host:port")` takes any `aiohttp_socks` URL, and both
+> `socks5://` and `socks5h://` work. It is not a guaranteed fix — Startpage and Mojeek
+> turn away proxy addresses too — so treat engine choice, not proxies, as the main
+> lever: Brave (API) and Yahoo are the ones that hold up under volume.
 
 ---
 
@@ -149,11 +172,16 @@ page: 2        links: 20
 
 Drop a new class into `search_engines/engines/`, subclass `SearchEngine`, override `_selectors`, `_first_page`, `_next_page`, then register it in `search_engines/engines/__init__.py`'s `search_engines_dict`. Mimic [`bing.py`](search_engines/engines/bing.py) for a pure-HTML engine, or [`brave.py`](search_engines/engines/brave.py) / [`ask.py`](search_engines/engines/ask.py) for JSON-driven ones.
 
+Two class attributes cover the common defences:
+
+- `_http_client_class = CurlHttpClient` — swaps the transport to curl_cffi with a Chrome TLS fingerprint, for engines that reject plain HTTP/1.1 (see [`yahoo.py`](search_engines/engines/yahoo.py)).
+- `_block_markers = ('...',)` — strings that identify a captcha/block page served with HTTP 200, so it sets `is_banned` instead of quietly yielding nothing.
+
 ---
 
 ## 📦 Requirements
 
-Python 3.9–3.13, plus the pinned dependencies in [`requirements.txt`](requirements.txt) (`aiohttp`, `aiohttp_socks`, `beautifulsoup4`, `curl_cffi`, `requests`).
+Python 3.9–3.13, plus the pinned dependencies in [`requirements.txt`](requirements.txt) (`aiohttp`, `aiohttp_socks`, `beautifulsoup4`, `curl_cffi`).
 
 ```bash
 pip install -r requirements.txt

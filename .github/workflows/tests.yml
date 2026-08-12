@@ -34,7 +34,7 @@ jobs:
           pip install -r requirements.txt
           pip install -r tests/requirements-test.txt
 
-      - name: Run mocked tests
+      - name: Run mocked tests (no network)
         env:
           BRAVE_API_KEY: dummy-test-key
-        run: pytest tests/test_engines_mocked.py -v
+        run: pytest -v

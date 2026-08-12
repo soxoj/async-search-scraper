@@ -2,11 +2,15 @@ from bs4 import BeautifulSoup
 
 from ..engine import SearchEngine
 from ..config import PROXY, TIMEOUT, FAKE_USER_AGENT
-from .. import output as out
 
 
 class Startpage(SearchEngine):
     '''Searches startpage.com'''
+
+    # Startpage answers a block with HTTP 200 and a captcha page. It rejects
+    # datacenter IPs outright, so this fires often.
+    _block_markers = ('blocked_feedback_form', 'sp/captcha-block', 'Startpage Blocked')
+
     def __init__(self, proxy=PROXY, timeout=TIMEOUT, *args, **kwargs):
         super(Startpage, self).__init__(proxy, timeout, *args, **kwargs)
         self._base_url = 'https://www.startpage.com'
@@ -20,8 +24,7 @@ class Startpage(SearchEngine):
             'text': 'p.description', 
             'links': 'div.result', 
             'next': 'div.pagination form',
-            'search_form': 'form#search input[name]',
-            'blocked_form': 'form#blocked_feedback_form'
+            'search_form': 'form#search input[name]'
         }
         return selectors[element]
     
@@ -65,17 +68,3 @@ class Startpage(SearchEngine):
                     }
                     break
         return {'url':url, 'data':data}
-    
-    def _is_ok(self, response):
-        '''Checks if the HTTP response is 200 OK.'''
-        soup = BeautifulSoup(response.html, 'html.parser')
-        selector = self._selectors('blocked_form')
-        is_blocked = soup.select_one(selector)
-        
-        self.is_banned = response.http in [403, 429, 503] or is_blocked
-        
-        if response.http == 200 and not is_blocked:
-            return True
-        msg = 'Banned' if is_blocked else ('HTTP ' + str(response.http)) if response.http else response.html
-        out.console(msg, level=out.Level.error)
-        return False

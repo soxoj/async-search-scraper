@@ -1,9 +1,19 @@
+from urllib.parse import urlparse, parse_qs
+
 from ..engine import SearchEngine
 from ..config import PROXY, TIMEOUT
+from ..http_client import CurlHttpClient
 
 
 class Duckduckgo(SearchEngine):
-    '''Searches duckduckgo.com'''
+    '''Searches duckduckgo.com.
+
+    The HTML endpoint answers plain HTTP/1.1 requests with an HTTP 202
+    challenge page, so it needs the same Chrome TLS fingerprint as Yahoo.
+    '''
+
+    _http_client_class = CurlHttpClient
+
     def __init__(self, proxy=PROXY, timeout=TIMEOUT, *args, **kwargs):
         super(Duckduckgo, self).__init__(proxy, timeout, *args, **kwargs)
         self._base_url = 'https://html.duckduckgo.com/html/'
@@ -35,3 +45,15 @@ class Duckduckgo(SearchEngine):
             data = {i['name']:i.get('value', '') for i in form.select(selector['inputs'])}
             url = self._base_url
         return {'url':url, 'data':data}
+
+    def _get_url(self, tag, item='href'):
+        '''Returns the URL of search results item.
+
+        GET responses wrap links in a protocol-relative
+        `//duckduckgo.com/l/?uddg=<target>` redirect; POST ones do not.
+        '''
+        url = super(Duckduckgo, self)._get_url(tag, item)
+        if '/l/?' in url:
+            target = parse_qs(urlparse(url).query).get('uddg', [u''])[0]
+            url = target or url
+        return url
