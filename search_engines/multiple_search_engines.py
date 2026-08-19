@@ -6,13 +6,20 @@ from . import config as cfg
 
 class MultipleSearchEngines(object):
     '''Uses multiple search engines.'''
-    def __init__(self, engines, proxy=cfg.PROXY, timeout=cfg.TIMEOUT):
+    def __init__(self, engines, proxy=cfg.PROXY, timeout=cfg.TIMEOUT, fallback=None):
+        '''
+        :param fallback: optional, a callable taking an engine name and
+            returning the engine to retry with when that one is blocked, or
+            None if it has no stand-in. See searchapi.fallback_for.
+        '''
         self._engines = []
         for se in search_engines_dict.values():
-            if se.__name__.lower() not in engines:
+            name = se.__name__.lower()
+            if name not in engines:
                 continue
             try:
-                self._engines.append(se(proxy, timeout))
+                stand_in = fallback(name, proxy, timeout) if fallback else None
+                self._engines.append(se(proxy, timeout, fallback=stand_in))
             except Exception as e:
                 # Engines needing config (Brave wants an API key) must not take
                 # down the whole run, notably with 'all'.
@@ -85,8 +92,8 @@ class MultipleSearchEngines(object):
 
 class AllSearchEngines(MultipleSearchEngines):
     '''Uses all search engines.'''
-    def __init__(self, proxy=cfg.PROXY, timeout=cfg.TIMEOUT):
+    def __init__(self, proxy=cfg.PROXY, timeout=cfg.TIMEOUT, fallback=None):
         super(AllSearchEngines, self).__init__(
-            list(search_engines_dict), proxy, timeout
+            list(search_engines_dict), proxy, timeout, fallback
         )
 

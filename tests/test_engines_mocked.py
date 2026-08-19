@@ -214,12 +214,97 @@ async def test_searchapi_rejects_upstream_it_does_not_offer(monkeypatch):
         SearchApi(engine='brave')
 
 
+# ---------- fallback ----------
+
+def _blocked_bing(monkeypatch):
+    async def fake(self, page, data=None):
+        return Response(http=429, html='')
+    monkeypatch.setattr(Bing, '_get_page', fake)
+
+
+async def test_fallback_runs_when_the_engine_is_blocked(monkeypatch):
+    monkeypatch.setenv('SEARCHAPI_KEY', 'fake-key-for-tests')
+    _blocked_bing(monkeypatch)
+    _patch_http_get(monkeypatch, 200, json.dumps(SEARCHAPI_PAYLOAD))
+
+    async with Bing(fallback=SearchApi(engine='bing')) as e:
+        _silence(e)
+        results = await e.search('test', pages=1)
+
+    assert e.fell_back is True
+    assert len(results) == 2
+    assert all(r['source'] == 'searchapi:bing' for r in results)
+
+
+async def test_no_fallback_without_one_configured(monkeypatch):
+    """The default stays free: a key in the environment changes nothing."""
+    monkeypatch.setenv('SEARCHAPI_KEY', 'fake-key-for-tests')
+    _blocked_bing(monkeypatch)
+
+    async with Bing() as e:
+        _silence(e)
+        results = await e.search('test', pages=1)
+
+    assert e.fell_back is False
+    assert len(results) == 0
+    assert e.is_banned is True
+
+
+async def test_no_fallback_when_the_engine_answered(monkeypatch):
+    """Results in hand mean no paid call, even with a fallback configured."""
+    monkeypatch.setenv('SEARCHAPI_KEY', 'fake-key-for-tests')
+    _patch_get_page(monkeypatch, Bing, BING_HTML)
+    calls = []
+
+    async def boom(self, page, data=None):
+        calls.append(page)
+        return Response(http=200, html=json.dumps(SEARCHAPI_PAYLOAD))
+
+    monkeypatch.setattr(HttpClient, 'get', boom)
+    async with Bing(fallback=SearchApi(engine='bing')) as e:
+        _silence(e)
+        results = await e.search('test', pages=1)
+
+    assert e.fell_back is False
+    assert calls == []
+    assert all(r['source'] == 'bing' for r in results)
+
+
+async def test_fallback_runs_when_the_request_never_landed(monkeypatch):
+    monkeypatch.setenv('SEARCHAPI_KEY', 'fake-key-for-tests')
+
+    async def never_lands(self, page, data=None):
+        return Response(http=0, html='connection refused')
+
+    monkeypatch.setattr(Bing, '_get_page', never_lands)
+    _patch_http_get(monkeypatch, 200, json.dumps(SEARCHAPI_PAYLOAD))
+
+    async with Bing(fallback=SearchApi(engine='bing')) as e:
+        _silence(e)
+        results = await e.search('test', pages=1)
+
+    assert e.fell_back is True
+    assert len(results) == 2
+
+
 async def test_results_carry_their_source(monkeypatch):
     _patch_get_page(monkeypatch, Bing, BING_HTML)
     async with Bing() as e:
         _silence(e)
         results = await e.search('test', pages=1)
     assert all(r['source'] == 'bing' for r in results)
+
+
+def test_fallback_for_maps_engines_to_upstreams(monkeypatch):
+    from search_engines.engines.searchapi import fallback_for
+
+    monkeypatch.setenv('SEARCHAPI_KEY', 'fake-key-for-tests')
+    assert fallback_for('aol')._upstream == 'yahoo'
+    assert fallback_for('bing')._upstream == 'bing'
+    assert fallback_for('mojeek') is None
+
+    monkeypatch.delenv('SEARCHAPI_KEY', raising=False)
+    assert fallback_for('bing') is None, 'no key means no fallback, not a crash'
 
 
 async def test_yahoo(monkeypatch):
@@ -424,6 +509,20 @@ async def test_thin_result_sets_are_never_flagged(monkeypatch):
 
     assert e.is_degraded is False
     assert len(results) == 2
+
+
+async def test_fallback_runs_on_degraded_results(monkeypatch):
+    """The case that matters: Bing answers 200 with junk, so nothing else fires."""
+    monkeypatch.setenv('SEARCHAPI_KEY', 'fake-key-for-tests')
+    _patch_get_page(monkeypatch, Bing, JUNK_HTML)
+    _patch_http_get(monkeypatch, 200, json.dumps(SEARCHAPI_PAYLOAD))
+
+    async with Bing(fallback=SearchApi(engine='bing')) as e:
+        _silence(e)
+        results = await e.search('soxoj maigret', pages=1)
+
+    assert e.fell_back is True
+    assert [r['source'] for r in results] == ['searchapi:bing'] * 2
 
 
 def test_query_terms_ignore_operators():

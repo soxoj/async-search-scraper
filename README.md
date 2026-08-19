@@ -136,6 +136,40 @@ asyncio.run(main())
 Calls are metered, so an exhausted balance is reported rather than swallowed:
 the reason comes back on `print_func` and `http_status` holds the code.
 
+### Falling back to the paid API when an engine fails
+
+Any engine accepts a `fallback=`. It runs only when the primary engine gave you
+nothing usable — blocked, unreachable, or answering with results unrelated to
+your query — and never when the primary already returned something.
+
+```python
+import asyncio
+from search_engines import Bing, SearchApi
+
+async def main():
+    async with Bing(fallback=SearchApi(engine="bing")) as engine:
+        results = await engine.search("my query")
+        print(engine.fell_back)                 # True if the fallback answered
+        for r in results:
+            print(r["source"], r["link"])       # 'bing' or 'searchapi:bing'
+
+asyncio.run(main())
+```
+
+Every result carries `source`, with or without a fallback, so a report always
+records which engine actually found each hit — and the CSV `engine` column
+follows it rather than the engine you asked for.
+
+On the CLI it is a flag, never automatic:
+
+```bash
+python search_engines_cli.py -e bing,duckduckgo -q "my query" --fallback searchapi
+```
+
+> [!IMPORTANT]
+> Having `SEARCHAPI_KEY` set does **not** enable the fallback. Spending credits
+> is always something you asked for explicitly.
+
 ### Brave (API key)
 
 > [!NOTE]
@@ -171,6 +205,7 @@ python search_engines_cli.py -e bing,yahoo -q "my query" -o json,print
 | `-f` | Filter results by `url` / `title` / `text` / `host` | none |
 | `-i` | Drop duplicate URLs across engines | off |
 | `-proxy` | HTTP/SOCKS proxy URL (`protocol://ip:port`) | none |
+| `--fallback` | Retry blocked engines through a paid API (`searchapi`) | off |
 
 Typical output:
 

@@ -52,6 +52,11 @@ class SearchEngine(object):
         '''HTTP status of the last response; 0 means the request never landed.
         Tells a transport failure apart from a genuinely empty result set.'''
 
+        self._fallback = kwargs.get('fallback')
+        '''An engine to retry with when this one is blocked. Never implicit:
+        a configured API key alone must not start spending money.'''
+        self.fell_back = False
+        '''True when the results came from the fallback rather than this engine.'''
         self.is_degraded = False
         '''True when the engine answered 200 with results unrelated to the query.
         Bing does this to addresses it dislikes instead of showing a captcha.'''
@@ -66,6 +71,10 @@ class SearchEngine(object):
 
     async def close(self):
         await self._http_client.close()
+        # We drive the fallback, so we close it - the caller built it but never
+        # ran it.
+        if self._fallback is not None:
+            await self._fallback.close()
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
@@ -279,8 +288,43 @@ class SearchEngine(object):
                 break
         self.print_func('', end='')
 
+        if self._needs_fallback():
+            await self._search_fallback(pages)
         return self.results
 
+    def _needs_fallback(self):
+        '''Fallback only when this engine yielded nothing at all.
+
+        A partial page set is worth more than the paid request it would take to
+        maybe complete it, and the common case - blocked on page 1 - lands here
+        anyway.
+        '''
+        # ponytail: all-or-nothing rule; revisit if partial page sets turn out
+        # to be common enough to be worth paying to finish.
+        if self._fallback is None or len(self.results):
+            return False
+        return self.is_banned or self.is_degraded or self.http_status == 0
+
+    async def _search_fallback(self, pages):
+        '''Reruns the query through the fallback engine and adopts its results.'''
+        fallback = self._fallback
+        self.print_func(
+            u'{} unavailable, falling back to {}'.format(self._source, fallback._source),
+            level=out.Level.warning
+        )
+        fallback.print_func = self.print_func
+        fallback.ignore_duplicate_urls = self.ignore_duplicate_urls
+        fallback.ignore_duplicate_domains = self.ignore_duplicate_domains
+        fallback._filters = self._filters
+
+        await fallback.search(self._query, pages)
+        self.results.extend(fallback.results.results())
+        # Report the outcome the results actually came from; `fell_back` keeps
+        # the fact that the primary engine failed from being lost.
+        self.fell_back = True
+        self.http_status = fallback.http_status
+        self.is_banned = fallback.is_banned
+    
     def output(self, output=out.PRINT, path=None):
         '''Prints search results and/or creates report files.
         Supported output format: html, csv, json.

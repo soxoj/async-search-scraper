@@ -111,3 +111,28 @@ class SearchApi(SearchEngine):
             'text': (r.get('snippet') or u'').strip(),
         }
 
+
+UPSTREAM_FOR = {
+    'google': 'google',
+    'bing': 'bing',
+    'duckduckgo': 'duckduckgo',
+    'yahoo': 'yahoo',
+    'aol': 'yahoo',  # AOL retired its index and serves Yahoo's already
+}
+'''Which upstream stands in for which of our engines. Startpage, Mojeek, Brave,
+Ask, Dogpile, Qwant and Torch have no counterpart at SearchAPI.'''
+
+
+def fallback_for(engine_name, proxy=PROXY, timeout=TIMEOUT, **kwargs):
+    '''Builds the SearchApi engine that covers `engine_name`, or None.
+
+    Returns None both for engines SearchAPI does not proxy and when no API key
+    is configured, so callers can offer the option without requiring it.
+    '''
+    upstream = UPSTREAM_FOR.get(engine_name.lower())
+    if not upstream:
+        return None
+    try:
+        return SearchApi(proxy, timeout, engine=upstream, **kwargs)
+    except ValueError:
+        return None
