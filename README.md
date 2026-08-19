@@ -46,7 +46,8 @@ That's it — `results.links()` gives you a flat `list[str]` of URLs; `results` 
 | [Startpage](https://www.startpage.com) | ⚠️ Often blocked | Serves a captcha to most non-browser traffic, including via proxies. Usable if you happen to have a clean address, otherwise prefer Yahoo or Brave. |
 | [Mojeek](https://www.mojeek.com) | ⚠️ Often blocked | Same story as Startpage — expect a captcha more often than results. |
 | [Torch](http://torchdeedp3i2jigzjdmfpn5ttjhthh5wbmda2rr3jvqjg5p77c54dqd.onion) | 🧅 Tor only | Requires a running TOR proxy (`socks5://127.0.0.1:9050`). |
-| [Google](https://www.google.com) | ❌ Deprecated | Renders results with JavaScript — the HTML it serves contains none, so there is nothing to scrape. |
+| [SearchApi](https://www.searchapi.io) | 🔑 API key | A paid SERP backend covering Google, Bing, DuckDuckGo, Yahoo, Yandex, Naver and Baidu. Use it to reach engines that block you — Google especially. Needs `SEARCHAPI_KEY`. |
+| [Google](https://www.google.com) | ❌ Deprecated | Renders results with JavaScript — the HTML it serves contains none, so there is nothing to scrape. Reachable via `SearchApi(engine="google")`. |
 | [Ask](https://www.ask.com) | ❌ Deprecated | IAC shut the search business down; the site is a farewell page. Not coming back. |
 | [Dogpile](https://www.dogpile.com) | ❌ Deprecated | Behind a JavaScript bot challenge that needs a real browser to solve. |
 | [Qwant](https://www.qwant.com) | ❌ Deprecated | Its API now requires an auth token that is not publicly available. |
@@ -111,6 +112,27 @@ async def main():
 asyncio.run(main())
 ```
 
+### SearchApi (API key)
+
+Reaches the engines that block scrapers — Google above all. One class, pick the
+upstream with `engine=`: `google`, `bing`, `duckduckgo`, `yahoo`, `yandex`,
+`naver`, `baidu`.
+
+```python
+import asyncio
+from search_engines import SearchApi
+
+async def main():
+    async with SearchApi(engine="google") as engine:   # reads SEARCHAPI_KEY
+        results = await engine.search("my query", pages=2)
+        print(results.links())
+
+asyncio.run(main())
+```
+
+Calls are metered, so an exhausted balance is reported rather than swallowed:
+the reason comes back on `print_func` and `http_status` holds the code.
+
 ### Brave (API key)
 
 > [!NOTE]
@@ -162,7 +184,7 @@ page: 2        links: 20
 
 ## ⚙️ Configuration
 
-- **`BRAVE_API_KEY`** — environment variable read by the `Brave` engine when `api_key=` isn't passed explicitly.
+- **`BRAVE_API_KEY`** / **`SEARCHAPI_KEY`** — environment variables read by the `Brave` and `SearchApi` engines when `api_key=` isn't passed explicitly. A local `.env` is convenient but git-ignored; the engines read the environment, not the file.
 - **Proxy** — any URL supported by [`aiohttp_socks`](https://pypi.org/project/aiohttp-socks/): `http://`, `https://`, `socks4://`, `socks5://`. Pass via `Bing(proxy="socks5://127.0.0.1:9050")` or `-proxy` on the CLI.
 - **Tunables** — `TIMEOUT`, `USER_AGENT`, default page count, and output directory live in [`search_engines/config.py`](search_engines/config.py).
 

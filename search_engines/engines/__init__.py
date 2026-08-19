@@ -10,9 +10,11 @@ from .startpage import Startpage
 from .torch import Torch
 from .yahoo import Yahoo
 from .qwant import Qwant
+from .searchapi import SearchApi
 
 
 search_engines_dict = {
+    'searchapi': SearchApi,
     'google': Google,
     'bing': Bing,
     'yahoo': Yahoo,

@@ -17,5 +17,6 @@ __all__ = [
     'Ask',
     'Mojeek',
     'Qwant',
+    'SearchApi',
     'Torch'
 ]

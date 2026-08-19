@@ -13,7 +13,8 @@ from aiohttp_socks import ProxyConnectionError, ProxyTimeoutError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from search_engines import Aol, Bing, Brave, Duckduckgo, Startpage, Yahoo  # noqa: E402
+from search_engines import Aol, Bing, Brave, Duckduckgo, SearchApi, Startpage, Yahoo  # noqa: E402
+from search_engines.http_client import HttpClient  # noqa: E402
 from search_engines.multiple_search_engines import (  # noqa: E402
     AllSearchEngines, MultipleSearchEngines,
 )
@@ -90,6 +91,19 @@ STARTPAGE_HTML = """
 """
 
 
+# Shape copied from a live SearchAPI response; every upstream returns this.
+SEARCHAPI_PAYLOAD = {
+    "search_metadata": {"status": "Success"},
+    "organic_results": [
+        {"position": 1, "title": "SearchAPI 1", "link": "https://example.com/sa-1",
+         "snippet": "SearchAPI snippet 1"},
+        {"position": 2, "title": "SearchAPI 2", "link": "https://example.com/sa-2",
+         "snippet": "SearchAPI snippet 2"},
+    ],
+    "pagination": {"current": 1},
+}
+
+
 # ---------- helpers ----------
 
 def _silence(engine):
@@ -138,6 +152,74 @@ async def test_brave_requires_api_key(monkeypatch):
     monkeypatch.delenv('BRAVE_API_KEY', raising=False)
     with pytest.raises(ValueError):
         Brave()
+
+
+def _patch_http_get(monkeypatch, http, body):
+    """Patches the transport, not _get_page, so the JSON parsing runs for real."""
+    async def fake(self, page, data=None):
+        return Response(http=http, html=body)
+    monkeypatch.setattr(HttpClient, 'get', fake)
+
+
+async def test_searchapi(monkeypatch):
+    monkeypatch.setenv('SEARCHAPI_KEY', 'fake-key-for-tests')
+    _patch_http_get(monkeypatch, 200, json.dumps(SEARCHAPI_PAYLOAD))
+    async with SearchApi(engine='duckduckgo') as e:
+        _silence(e)
+        results = await e.search('test', pages=1)
+    assert results.links() == ['https://example.com/sa-1', 'https://example.com/sa-2']
+    assert results._results[0]['title'] == 'SearchAPI 1'
+    assert results._results[0]['text'] == 'SearchAPI snippet 1'
+    assert results._results[0]['host'] == 'example.com'
+
+
+async def test_searchapi_reports_the_api_error(monkeypatch):
+    """A dead key and an exhausted balance must not look like an empty result."""
+    monkeypatch.setenv('SEARCHAPI_KEY', 'fake-key-for-tests')
+    _patch_http_get(monkeypatch, 401, '{"error": "Invalid API key."}')
+    logged = []
+    async with SearchApi() as e:
+        e.print_func = lambda msg, **k: logged.append(msg)
+        results = await e.search('test', pages=1)
+    assert len(results) == 0
+    assert e.http_status == 401
+    assert any('Invalid API key.' in m for m in logged)
+
+
+async def test_searchapi_empty_page_stops_pagination(monkeypatch):
+    monkeypatch.setenv('SEARCHAPI_KEY', 'fake-key-for-tests')
+    calls = []
+
+    async def fake(self, page, data=None):
+        calls.append(page)
+        return Response(http=200, html='{"organic_results": []}')
+
+    monkeypatch.setattr(HttpClient, 'get', fake)
+    async with SearchApi() as e:
+        _silence(e)
+        await e.search('test', pages=5)
+    assert len(calls) == 1
+
+
+async def test_searchapi_requires_api_key(monkeypatch):
+    monkeypatch.delenv('SEARCHAPI_KEY', raising=False)
+    with pytest.raises(ValueError):
+        SearchApi()
+
+
+async def test_searchapi_rejects_upstream_it_does_not_offer(monkeypatch):
+    """Brave, Mojeek and Startpage are not proxied - fail loudly, not at runtime."""
+    monkeypatch.setenv('SEARCHAPI_KEY', 'fake-key-for-tests')
+    with pytest.raises(ValueError):
+        SearchApi(engine='brave')
+
+
+async def test_results_carry_their_source(monkeypatch):
+    _patch_get_page(monkeypatch, Bing, BING_HTML)
+    async with Bing() as e:
+        _silence(e)
+        results = await e.search('test', pages=1)
+    assert all(r['source'] == 'bing' for r in results)
 
 
 async def test_yahoo(monkeypatch):
@@ -249,7 +331,6 @@ async def test_empty_page_stops_pagination(monkeypatch):
 ])
 async def test_transport_errors_do_not_raise(monkeypatch, exc):
     '''Transport failures must surface as http=0, not escape search().'''
-    from search_engines.http_client import HttpClient
 
     class Boom:
         async def get(self, *a, **k):
@@ -299,10 +380,3 @@ def test_filters_apply_to_json_engines(monkeypatch):
     ]
     assert e._apply_filters(items) == items[:1]
 
-
-async def test_results_carry_their_source(monkeypatch):
-    _patch_get_page(monkeypatch, Bing, BING_HTML)
-    async with Bing() as e:
-        _silence(e)
-        results = await e.search('test', pages=1)
-    assert all(r['source'] == 'bing' for r in results)
