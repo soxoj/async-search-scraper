@@ -298,3 +298,11 @@ def test_filters_apply_to_json_engines(monkeypatch):
         {'host': 'example.com', 'link': 'https://example.com/b', 'title': '', 'text': ''},
     ]
     assert e._apply_filters(items) == items[:1]
+
+
+async def test_results_carry_their_source(monkeypatch):
+    _patch_get_page(monkeypatch, Bing, BING_HTML)
+    async with Bing() as e:
+        _silence(e)
+        results = await e.search('test', pages=1)
+    assert all(r['source'] == 'bing' for r in results)

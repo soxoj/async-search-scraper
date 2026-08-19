@@ -24,7 +24,9 @@ def create_csv_data(search_engines):
     for engine in search_engines:
         for i in engine.results:
             row = [
-                engine._query, engine.__class__.__name__, 
+                # Per result, not per engine: with a fallback in play the two
+                # differ, and the report must not credit Bing for a paid hit.
+                engine._query, i.get('source', engine.__class__.__name__),
                 i['host'], i['link'], i['title'], i['text']
             ]
             row = [decode_bytes(i) for i in row]

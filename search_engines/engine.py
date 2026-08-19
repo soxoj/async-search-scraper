@@ -51,6 +51,12 @@ class SearchEngine(object):
         '''HTTP status of the last response; 0 means the request never landed.
         Tells a transport failure apart from a genuinely empty result set.'''
 
+
+    @property
+    def _source(self):
+        '''Names the engine that produced a result, for the `source` field.'''
+        return self.__class__.__name__.lower()
+
     async def __aenter__(self):
         return self
 
@@ -112,7 +118,7 @@ class SearchEngine(object):
     def _query_in(self, item):
         '''Checks if query is contained in the item.'''
         return self._query.lower() in item.lower()
-    
+
     def _apply_filters(self, results):
         '''Applies the active search operators to parsed results.'''
         if u'url' in self._filters:
@@ -136,6 +142,9 @@ class SearchEngine(object):
         for item in items:
             if not utils.is_url(item['link']):
                 continue
+            # Stamped before the dedup checks below, so stored and incoming
+            # items stay comparable.
+            item.setdefault('source', self._source)
             if item in self.results:
                 continue
             if self.ignore_duplicate_urls and item['link'] in self.results.links():
@@ -204,6 +213,7 @@ class SearchEngine(object):
                     break
                 tags = BeautifulSoup(response.html, "html.parser")
                 items = self._filter_results(tags)
+
                 collected = self._collect_results(items)
 
                 msg = 'page: {:<8} links: {}'.format(page, len(self.results))
@@ -224,8 +234,9 @@ class SearchEngine(object):
             except KeyboardInterrupt:
                 break
         self.print_func('', end='')
+
         return self.results
-    
+
     def output(self, output=out.PRINT, path=None):
         '''Prints search results and/or creates report files.
         Supported output format: html, csv, json.
