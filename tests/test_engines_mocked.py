@@ -380,3 +380,57 @@ def test_filters_apply_to_json_engines(monkeypatch):
     ]
     assert e._apply_filters(items) == items[:1]
 
+
+# ---------- degraded results ----------
+
+# Ten real-looking links with nothing to do with the query: what Bing serves a
+# datacenter address instead of a captcha. Shape copied from a live response.
+JUNK_HTML = '<html><body><ol id="b_results">' + ''.join(
+    '<li class="b_algo"><h2><a href="https://mlb.com/news/{n}">Baseball story {n}'
+    '</a></h2><p>Scores and standings</p></li>'.format(n=n)
+    for n in range(1, 11)
+) + '</ol></body></html>'
+
+
+async def test_unrelated_results_are_not_reported_as_findings(monkeypatch):
+    """A full page matching the query nowhere is junk, not a result set."""
+    _patch_get_page(monkeypatch, Bing, JUNK_HTML)
+    async with Bing() as e:
+        _silence(e)
+        results = await e.search('soxoj maigret', pages=1)
+
+    assert e.is_degraded is True
+    assert len(results) == 0, 'fabricated hits must not reach the report'
+    assert e.http_status == 200 and e.is_banned is False
+
+
+async def test_relevant_results_are_not_flagged(monkeypatch):
+    """The guard must stay quiet on a healthy page."""
+    _patch_get_page(monkeypatch, Bing, JUNK_HTML)
+    async with Bing() as e:
+        _silence(e)
+        results = await e.search('baseball', pages=1)
+
+    assert e.is_degraded is False
+    assert len(results) == 10
+
+
+async def test_thin_result_sets_are_never_flagged(monkeypatch):
+    """Judging relevance off a couple of tail results is noise, not signal."""
+    _patch_get_page(monkeypatch, Bing, BING_HTML)
+    async with Bing() as e:
+        _silence(e)
+        results = await e.search('something else entirely', pages=1)
+
+    assert e.is_degraded is False
+    assert len(results) == 2
+
+
+def test_query_terms_ignore_operators():
+    e = Bing()
+    e._query = 'site:github.com "soxoj" a -maigret'
+    terms = e._query_terms()
+    assert 'github.com' in terms
+    assert 'soxoj' in terms
+    assert 'maigret' in terms
+    assert 'a' not in terms, 'too short to carry signal'

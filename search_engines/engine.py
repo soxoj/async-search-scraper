@@ -1,4 +1,5 @@
 import asyncio
+import re
 
 from bs4 import BeautifulSoup
 from random import uniform as random_uniform
@@ -51,6 +52,9 @@ class SearchEngine(object):
         '''HTTP status of the last response; 0 means the request never landed.
         Tells a transport failure apart from a genuinely empty result set.'''
 
+        self.is_degraded = False
+        '''True when the engine answered 200 with results unrelated to the query.
+        Bing does this to addresses it dislikes instead of showing a captcha.'''
 
     @property
     def _source(self):
@@ -119,6 +123,37 @@ class SearchEngine(object):
         '''Checks if query is contained in the item.'''
         return self._query.lower() in item.lower()
 
+    def _query_terms(self):
+        '''The query words worth matching against, operators stripped.'''
+        terms = []
+        for term in re.split(r'\s+', self._query.lower()):
+            term = term.strip(u'"\'()').lstrip(u'+-')
+            if u':' in term:
+                # site:github.com - the value is the part that shows up in results
+                term = term.split(u':', 1)[-1]
+            if len(term) >= 3:
+                terms.append(term)
+        return terms
+
+    def _looks_degraded(self, items):
+        '''True when a full page of results mentions the query nowhere.
+
+        Bing serves addresses it dislikes a page of real-looking but unrelated
+        links under HTTP 200 - no captcha, no error code, different junk every
+        time. Nothing in the markup distinguishes it, so the query itself is
+        the only available signal.
+        '''
+        # ponytail: needs a FULL page with zero term hits, so a thin tail of
+        # genuine results cannot trip it. Tighten only if false positives show
+        # up in practice - the cost of a miss here is a fabricated finding.
+        terms = self._query_terms()
+        if len(items) < 5 or not terms:
+            return False
+        haystack = u' '.join(
+            u'{} {} {}'.format(i['title'], i['text'], i['link']) for i in items
+        ).lower()
+        return not any(term in haystack for term in terms)
+    
     def _apply_filters(self, results):
         '''Applies the active search operators to parsed results.'''
         if u'url' in self._filters:
@@ -213,6 +248,15 @@ class SearchEngine(object):
                     break
                 tags = BeautifulSoup(response.html, "html.parser")
                 items = self._filter_results(tags)
+
+                if self._looks_degraded(items):
+                    self.is_degraded = True
+                    self.print_func(
+                        u'{} returned results unrelated to the query - treat them '
+                        u'as unreliable'.format(self._source),
+                        level=out.Level.warning
+                    )
+                    break
 
                 collected = self._collect_results(items)
 
