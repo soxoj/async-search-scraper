@@ -293,17 +293,20 @@ class SearchEngine(object):
         return self.results
 
     def _needs_fallback(self):
-        '''Fallback only when this engine yielded nothing at all.
+        '''Fallback whenever this engine yielded nothing at all.
 
-        A partial page set is worth more than the paid request it would take to
-        maybe complete it, and the common case - blocked on page 1 - lands here
-        anyway.
+        Not only on a visible failure. Google answers 200 with markup that
+        carries no results, so a ban, a dead scraper and a query with genuinely
+        no hits are indistinguishable from the outside - and demanding a failure
+        signal meant the deprecated engines, the ones a paid backend exists to
+        cover, never fell back at all.
+
+        A partial page set does not trigger it: those results are worth more
+        than the paid request it would take to maybe complete them.
         '''
         # ponytail: all-or-nothing rule; revisit if partial page sets turn out
         # to be common enough to be worth paying to finish.
-        if self._fallback is None or len(self.results):
-            return False
-        return self.is_banned or self.is_degraded or self.http_status == 0
+        return self._fallback is not None and not len(self.results)
 
     async def _search_fallback(self, pages):
         '''Reruns the query through the fallback engine and adopts its results.'''
