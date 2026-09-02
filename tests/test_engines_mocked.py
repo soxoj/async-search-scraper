@@ -533,3 +533,20 @@ def test_query_terms_ignore_operators():
     assert 'soxoj' in terms
     assert 'maigret' in terms
     assert 'a' not in terms, 'too short to carry signal'
+
+
+async def test_fallback_runs_when_the_engine_just_returns_nothing(monkeypatch):
+    """No ban, no error, no junk - just an empty page, which is what a dead
+    scraper looks like from outside. Google answers 200 with markup carrying no
+    results, and demanding a failure signal meant it never fell back at all."""
+    monkeypatch.setenv('SEARCHAPI_KEY', 'fake-key-for-tests')
+    _patch_get_page(monkeypatch, Bing, '<html><body><ol id="b_results"></ol></body></html>')
+    _patch_http_get(monkeypatch, 200, json.dumps(SEARCHAPI_PAYLOAD))
+
+    async with Bing(fallback=SearchApi(engine='bing')) as e:
+        _silence(e)
+        results = await e.search('test', pages=1)
+
+    assert e.is_banned is False and e.is_degraded is False and e.http_status == 200
+    assert e.fell_back is True
+    assert [r['source'] for r in results] == ['searchapi:bing'] * 2
